@@ -1,0 +1,1 @@
+enum CipherType { des, tripleDes, aes }
