@@ -17,9 +17,7 @@ import 'package:encryptorium/models/cipher.dart';
 import 'package:encryptorium/backend/encryption.dart';
 import 'package:encryptorium/utils/file_utils.dart';
 import 'package:encryptorium/utils/key_generator.dart';
-
-// Web import - only used when kIsWeb is true
-import 'dart:html' as html;
+import 'package:universal_html/html.dart' as html;
 
 class DesEncryptPage extends StatefulWidget {
   final CipherType cipherType;
