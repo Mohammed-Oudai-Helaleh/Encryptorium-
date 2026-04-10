@@ -13,10 +13,10 @@ import 'package:encryptorium/custom/file_picker_button.dart';
 import 'package:encryptorium/custom/copy_button.dart';
 import 'package:encryptorium/custom/output_field.dart';
 import 'package:encryptorium/models/cipher.dart';
-import 'package:encryptorium/backend/encryption.dart';
 import 'package:encryptorium/models/aes_key_length.dart';
 import 'package:encryptorium/utils/file_utils.dart';
 import 'package:universal_html/html.dart' as html;
+import 'package:encryptorium/cipher_processing_page.dart';
 
 class AesDecryptPage extends StatefulWidget {
   final CipherType cipherType;
@@ -32,7 +32,7 @@ class _AesDecryptPageState extends State<AesDecryptPage> {
   final TextEditingController _keyController = TextEditingController();
   final TextEditingController _outputController = TextEditingController();
 
-  bool _isDecrypting = false;
+  // Validation errors
   String? _ciphertextError;
   String? _keyError;
   bool _submitted = false;
@@ -117,6 +117,12 @@ class _AesDecryptPageState extends State<AesDecryptPage> {
   }
 
   Future<void> _decrypt() async {
+    // 🔍 DEBUG: Confirm this method is called on Web
+    if (kIsWeb) {
+      debugPrint('🔓 [AES] _decrypt() STARTED');
+      debugPrint('🔓 [AES] isFileMode: ${_selectedCipherFile != null || _selectedCipherFileBytes != null}');
+    }
+
     _submitted = true;
     _validateAll();
 
@@ -128,39 +134,104 @@ class _AesDecryptPageState extends State<AesDecryptPage> {
     }
 
     _outputController.clear();
-    setState(() => _isDecrypting = true);
 
-    try {
-      if (kIsWeb) {
-        await _decryptWeb();
-      } else {
-        await _decryptNative();
+    // 1️⃣ Prepare input data for background processing
+    final bool isFileMode = _selectedCipherFile != null || _selectedCipherFileBytes != null;
+    String inputData = _ciphertextController.text;
+
+    if (isFileMode && _selectedCipherFileBytes != null) {
+      // Web file mode: decode bytes to UTF-8 string for isolate transfer
+      inputData = utf8.decode(_selectedCipherFileBytes!);
+    } else if (isFileMode && _selectedCipherFile != null) {
+      // Native file mode: read file as string directly
+      try {
+        inputData = await _selectedCipherFile!.readAsString(encoding: utf8);
+      } catch (e, stack) {
+        if (mounted) {
+          if (kIsWeb) {
+            debugPrint('❌ [AES] Navigation/processing error: $e');
+            debugPrint('❌ [AES] Stack: $stack');
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to read file: $e')),
+          );
+        }
+        return;
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Decryption failed: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isDecrypting = false);
-      }
+    }
+
+    // 2️⃣ Create cipher request for DECRYPTION
+    final request = CipherRequest.decrypt(
+      cipherType: widget.cipherType,
+      inputData: inputData,
+      keys: [_keyController.text],
+    );
+
+    // 3️⃣ Navigate to processing page & run decryption (platform-aware)
+    if (kIsWeb) {
+      debugPrint('🔓 [AES] About to call processCipherInBackground...');
+    }
+    final result = await processCipherInBackground(
+      context,
+      title: 'Decrypting your data...',
+      subtitle: isFileMode
+          ? 'Processing: ${_selectedCipherFileName ?? "unknown"}'
+          : 'Restoring plaintext with AES...',
+      request: request,
+    );
+
+    // 4️⃣ Handle result after auto-redirect
+    // 🔍 DEBUG: Confirm result received
+    if (kIsWeb) {
+      debugPrint('🔓 [AES] Received result: ${result != null ? 'SUCCESS' : 'NULL'}');
+    }
+    if (result != null && mounted) {
+      _handleDecryptionResult(result, isFileMode);
     }
   }
 
-  Future<void> _decryptNative() async {
-    final key = _keyController.text;
+  /// Handles the decryption result: saves/downloads file or displays plaintext
+  void _handleDecryptionResult(String plaintext, bool isFileMode) {
+    if (isFileMode) {
+      if (kIsWeb) {
+        // 🌐 WEB: Decode base64 plaintext to bytes, then trigger download
+        try {
+          final originalBytes = base64.decode(plaintext);
+          String originalFileName = _selectedCipherFileName ?? 'decrypted_file';
+          if (originalFileName.endsWith('.enc')) {
+            originalFileName = originalFileName.substring(0, originalFileName.length - 4);
+          } else {
+            originalFileName = 'decrypted_$originalFileName';
+          }
+          _downloadDecryptedFileWeb(originalFileName, originalBytes);
+          _outputController.text = '📥 Downloaded: $originalFileName';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('✅ File decrypted and downloaded: $originalFileName')),
+          );
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Failed to decode decrypted file: $e')),
+            );
+          }
+        }
+      } else {
+        // 💻 NATIVE: Save decrypted file to disk
+        _saveDecryptedFileNative(plaintext);
+      }
+    } else {
+      // 📝 TEXT MODE: Display plaintext in output field
+      _outputController.text = plaintext;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ Decryption completed successfully!')),
+      );
+    }
+  }
 
-    if (_selectedCipherFile != null) {
-      // ========== FILE MODE - Native platforms ==========
-      final cipherFile = _selectedCipherFile!;
-      final cipherText = await cipherFile.readAsString(encoding: utf8);
-
-      final encryption = Encryption.aes('', key);
-      final base64Plain = encryption.decrypt(cipherText);
-      final originalBytes = base64.decode(base64Plain);
-
+  /// Saves decrypted file to disk on native platforms (Windows/Android)
+  Future<void> _saveDecryptedFileNative(String base64Plaintext) async {
+    try {
+      final originalBytes = base64.decode(base64Plaintext);
       String originalFileName = _selectedCipherFileName ?? 'decrypted_file';
       if (originalFileName.endsWith('.enc')) {
         originalFileName = originalFileName.substring(0, originalFileName.length - 4);
@@ -180,70 +251,21 @@ class _AesDecryptPageState extends State<AesDecryptPage> {
           SnackBar(content: Text('✅ File decrypted to: $outputPath')),
         );
       }
-    } else {
-      // ========== TEXT MODE - All platforms ==========
-      final ciphertext = _ciphertextController.text;
-      final encryption = Encryption.aes('', key);
-      final plaintext = encryption.decrypt(ciphertext);
-      _outputController.text = plaintext;
-
+    } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Decryption completed successfully!')),
-        );
-      }
-    }
-  }
-
-  Future<void> _decryptWeb() async {
-    final key = _keyController.text;
-
-    if (_selectedCipherFileBytes != null && _selectedCipherFileName != null) {
-      // ========== FILE MODE - Web ==========
-      final cipherText = utf8.decode(_selectedCipherFileBytes!);
-
-      final encryption = Encryption.aes('', key);
-      final base64Plain = encryption.decrypt(cipherText);
-      final originalBytes = base64.decode(base64Plain);
-
-      String originalFileName = _selectedCipherFileName!;
-      if (originalFileName.endsWith('.enc')) {
-        originalFileName = originalFileName.substring(0, originalFileName.length - 4);
-      } else {
-        originalFileName = 'decrypted_$originalFileName';
-      }
-
-      // Trigger browser download for decrypted file
-      await _downloadDecryptedFileWeb(originalFileName, originalBytes);
-
-      _outputController.text = '📥 Downloaded: $originalFileName';
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ File decrypted and downloaded: $originalFileName')),
-        );
-      }
-    } else {
-      // ========== TEXT MODE - All platforms (same as native) ==========
-      final ciphertext = _ciphertextController.text;
-      final encryption = Encryption.aes('', key);
-      final plaintext = encryption.decrypt(ciphertext);
-      _outputController.text = plaintext;
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Decryption completed successfully!')),
+          SnackBar(content: Text('Failed to save file: $e')),
         );
       }
     }
   }
 
   /// Triggers a file download in the browser for binary data
-  Future<void> _downloadDecryptedFileWeb(String fileName, List<int> bytes) async {
+  void _downloadDecryptedFileWeb(String fileName, List<int> bytes) {
     if (!kIsWeb) return;
 
     final base64Data = base64.encode(bytes);
-    final dataUri = 'data:application/octet-stream;base64,$base64Data';
+    final dataUri = 'application/octet-stream;base64,$base64Data';
 
     // Create and trigger download link
     final anchor = html.AnchorElement(href: dataUri)
@@ -418,8 +440,8 @@ class _AesDecryptPageState extends State<AesDecryptPage> {
 
   Widget _buildDecryptButton() {
     return MyOutlinedButton(
-      text: _isDecrypting ? 'Decrypting...' : 'Decrypt',
-      onPressed: _isDecrypting ? null : _decrypt,
+      text: 'Decrypt',
+      onPressed: _decrypt,
     );
   }
 }

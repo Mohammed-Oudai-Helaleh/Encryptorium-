@@ -66,65 +66,300 @@ class Encryption {
     }
   }
 
-  //----------------------------------------------------
-  // DES Encryption/Decryption
-  //----------------------------------------------------
+  // ============================================================
+  //                      OPTIMIZED DES
+  // ============================================================
+
+  // ---------- DES tables (static, precomputed) ----------
+  static const List<int> _ipTable = [
+    58, 50, 42, 34, 26, 18, 10, 2, 60, 52, 44, 36, 28, 20, 12, 4,
+    62, 54, 46, 38, 30, 22, 14, 6, 64, 56, 48, 40, 32, 24, 16, 8,
+    57, 49, 41, 33, 25, 17, 9, 1, 59, 51, 43, 35, 27, 19, 11, 3,
+    61, 53, 45, 37, 29, 21, 13, 5, 63, 55, 47, 39, 31, 23, 15, 7
+  ];
+
+  static const List<int> _fpTable = [
+    40, 8, 48, 16, 56, 24, 64, 32, 39, 7, 47, 15, 55, 23, 63, 31,
+    38, 6, 46, 14, 54, 22, 62, 30, 37, 5, 45, 13, 53, 21, 61, 29,
+    36, 4, 44, 12, 52, 20, 60, 28, 35, 3, 43, 11, 51, 19, 59, 27,
+    34, 2, 42, 10, 50, 18, 58, 26, 33, 1, 41, 9, 49, 17, 57, 25
+  ];
+
+  static const List<int> _expansionTable = [
+    32, 1, 2, 3, 4, 5, 4, 5, 6, 7, 8, 9, 8, 9, 10, 11,
+    12, 13, 12, 13, 14, 15, 16, 17, 16, 17, 18, 19, 20, 21,
+    20, 21, 22, 23, 24, 25, 24, 25, 26, 27, 28, 29, 28, 29, 30, 31, 32, 1
+  ];
+
+  static const List<int> _pBoxTable = [
+    16, 7, 20, 21, 29, 12, 28, 17, 1, 15, 23, 26, 5, 18, 31, 10,
+    2, 8, 24, 14, 32, 27, 3, 9, 19, 13, 30, 6, 22, 11, 4, 25
+  ];
+
+  static const List<int> _pc2Table = [
+    14, 17, 11, 24, 1, 5, 3, 28, 15, 6, 21, 10, 23, 19, 12, 4,
+    26, 8, 16, 7, 27, 20, 13, 2, 41, 52, 31, 37, 47, 55, 30, 40,
+    51, 45, 33, 48, 44, 49, 39, 56, 34, 53, 46, 42, 50, 36, 29, 32
+  ];
+
+  static const List<int> _shiftSchedule = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1];
+
+  // S-boxes as 4x16 tables (original format)
+  static const List<List<List<int>>> _sBoxes = [
+    [
+      [14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7],
+      [0, 15, 7, 4, 14, 2, 13, 1, 10, 6, 12, 11, 9, 5, 3, 8],
+      [4, 1, 14, 8, 13, 6, 2, 11, 15, 12, 9, 7, 3, 10, 5, 0],
+      [15, 12, 8, 2, 4, 9, 1, 7, 5, 11, 3, 14, 10, 0, 6, 13]
+    ],
+    [
+      [15, 1, 8, 14, 6, 11, 3, 4, 9, 7, 2, 13, 12, 0, 5, 10],
+      [3, 13, 4, 7, 15, 2, 8, 14, 12, 0, 1, 10, 6, 9, 11, 5],
+      [0, 14, 7, 11, 10, 4, 13, 1, 5, 8, 12, 6, 9, 3, 2, 15],
+      [13, 8, 10, 1, 3, 15, 4, 2, 11, 6, 7, 12, 0, 5, 14, 9]
+    ],
+    [
+      [10, 0, 9, 14, 6, 3, 15, 5, 1, 13, 12, 7, 11, 4, 2, 8],
+      [13, 7, 0, 9, 3, 4, 6, 10, 2, 8, 5, 14, 12, 11, 15, 1],
+      [13, 6, 4, 9, 8, 15, 3, 0, 11, 1, 2, 12, 5, 10, 14, 7],
+      [1, 10, 13, 0, 6, 9, 8, 7, 4, 15, 14, 3, 11, 5, 2, 12]
+    ],
+    [
+      [7, 13, 14, 3, 0, 6, 9, 10, 1, 2, 8, 5, 11, 12, 4, 15],
+      [13, 8, 11, 5, 6, 15, 0, 3, 4, 7, 2, 12, 1, 10, 14, 9],
+      [10, 6, 9, 0, 12, 11, 7, 13, 15, 1, 3, 14, 5, 2, 8, 4],
+      [3, 15, 0, 6, 10, 1, 13, 8, 9, 4, 5, 11, 12, 7, 2, 14]
+    ],
+    [
+      [2, 12, 4, 1, 7, 10, 11, 6, 8, 5, 3, 15, 13, 0, 14, 9],
+      [14, 11, 2, 12, 4, 7, 13, 1, 5, 0, 15, 10, 3, 9, 8, 6],
+      [4, 2, 1, 11, 10, 13, 7, 8, 15, 9, 12, 5, 6, 3, 0, 14],
+      [11, 8, 12, 7, 1, 14, 2, 13, 6, 15, 0, 9, 10, 4, 5, 3]
+    ],
+    [
+      [12, 1, 10, 15, 9, 2, 6, 8, 0, 13, 3, 4, 14, 7, 5, 11],
+      [10, 15, 4, 2, 7, 12, 9, 5, 6, 1, 13, 14, 0, 11, 3, 8],
+      [9, 14, 15, 5, 2, 8, 12, 3, 7, 0, 4, 10, 1, 13, 11, 6],
+      [4, 3, 2, 12, 9, 5, 15, 10, 11, 14, 1, 7, 6, 0, 8, 13]
+    ],
+    [
+      [4, 11, 2, 14, 15, 0, 8, 13, 3, 12, 9, 7, 5, 10, 6, 1],
+      [13, 0, 11, 7, 4, 9, 1, 10, 14, 3, 5, 12, 2, 15, 8, 6],
+      [1, 4, 11, 13, 12, 3, 7, 14, 10, 15, 6, 8, 0, 5, 9, 2],
+      [6, 11, 13, 8, 1, 4, 10, 7, 9, 5, 0, 15, 14, 2, 3, 12]
+    ],
+    [
+      [13, 2, 8, 4, 6, 15, 11, 1, 10, 9, 3, 14, 5, 0, 12, 7],
+      [1, 15, 13, 8, 10, 3, 7, 4, 12, 5, 6, 11, 0, 14, 9, 2],
+      [7, 11, 4, 1, 9, 12, 14, 2, 0, 6, 10, 13, 15, 3, 5, 8],
+      [2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11]
+    ]
+  ];
+
+  // Precomputed S-box lookup: 8 boxes, each 64 entries (6-bit input -> 4-bit output)
+  static final List<List<int>> _sBoxLookup = List.generate(8, (i) {
+    return List.generate(64, (index) {
+      int row = ((index >> 4) & 0x2) | (index & 0x1);
+      int col = (index >> 1) & 0xF;
+      return _sBoxes[i][row][col];
+    });
+  });
+
+  // ---------- Integer permutations (fast) ----------
+  static int _permute64(int block, List<int> table) {
+    int result = 0;
+    for (int i = 0; i < 64; i++) {
+      int srcPos = table[i] - 1;
+      int bit = (block >>> (63 - srcPos)) & 1;
+      result |= (bit << (63 - i));
+    }
+    return result;
+  }
+
+  static int _permute32(int value, List<int> table, int outBits) {
+    int result = 0;
+    for (int i = 0; i < outBits; i++) {
+      int srcPos = table[i] - 1;
+      int bit = (value >>> (31 - srcPos)) & 1;
+      result |= (bit << (outBits - 1 - i));
+    }
+    return result;
+  }
+
+  static int _initialPermutationInt(int block) => _permute64(block, _ipTable);
+  static int _finalPermutationInt(int block) => _permute64(block, _fpTable);
+  static int _expansionPermutationInt(int value) => _permute32(value, _expansionTable, 48);
+  static int _permutationInt(int value) => _permute32(value, _pBoxTable, 32);
+
+  static int _sBoxSubstitutionInt(int input48) {
+    int output = 0;
+    for (int i = 0; i < 8; i++) {
+      int chunk = (input48 >> (42 - 6 * i)) & 0x3F; // extract 6 bits
+      int sboxValue = _sBoxLookup[i][chunk];
+      output = (output << 4) | sboxValue;
+    }
+    return output;
+  }
+
+  static int _feistelFunctionInt(int right32, int subkey48) {
+    int expanded = _expansionPermutationInt(right32);
+    int xored = expanded ^ subkey48;
+    int substituted = _sBoxSubstitutionInt(xored);
+    return _permutationInt(substituted);
+  }
+
+  static int _desEncryptBlockInt(int block, List<int> subkeys48) {
+    block = _initialPermutationInt(block);
+    int left = (block >>> 32) & 0xFFFFFFFF;
+    int right = block & 0xFFFFFFFF;
+    for (int i = 0; i < 16; i++) {
+      int newRight = left ^ _feistelFunctionInt(right, subkeys48[i]);
+      left = right;
+      right = newRight;
+    }
+    int preOutput = (right << 32) | left;
+    return _finalPermutationInt(preOutput);
+  }
+
+  // ---------- DES public methods ----------
   String _desEncrypt(String plainText, String key) {
-    List<int> plainBytes = List.from(utf8.encode(plainText));
+    // Convert to growable list so we can add padding
+    List<int> plainBytes = utf8.encode(plainText).toList();
     int padding = 8 - (plainBytes.length % 8);
     if (padding == 0) padding = 8;
     plainBytes.addAll(List.filled(padding, padding));
 
-    Uint8List asciiKey = Uint8List.fromList(key.codeUnits);
-    String key56 = removeParityBits(asciiKey);
-    String key56Binary = stringToBinary(key56);
-    List<String> subkeys = desSubkeysGeneration(key56Binary);
+    List<String> subkeysStr = desSubkeysGeneration(_keyTo56Bits(key));
+    List<int> subkeys = subkeysStr.map((s) => int.parse(s, radix: 2)).toList();
 
     List<int> cipherBytes = [];
     for (int i = 0; i < plainBytes.length; i += 8) {
-      List<int> blockBytes = plainBytes.sublist(i, i + 8);
-      String blockBinary = bytesToBinary(blockBytes);
-      String encryptedBinary = _desEncryptBlock(blockBinary, subkeys);
-      cipherBytes.addAll(binaryToBytes(encryptedBinary));
+      int block = _bytesToBlock(plainBytes.sublist(i, i + 8));
+      int encrypted = _desEncryptBlockInt(block, subkeys);
+      cipherBytes.addAll(_blockToBytes(encrypted));
     }
-
     return String.fromCharCodes(cipherBytes);
   }
 
   String _desDecrypt(String cipherText, String key) {
     List<int> cipherBytes = cipherText.codeUnits;
-
-    Uint8List asciiKey = Uint8List.fromList(key.codeUnits);
-    String key56 = removeParityBits(asciiKey);
-    String key56Binary = stringToBinary(key56);
-    List<String> subkeys = desSubkeysGeneration(key56Binary);
-    List<String> reversedSubkeys = subkeys.reversed.toList();
+    List<String> subkeysStr = desSubkeysGeneration(_keyTo56Bits(key));
+    List<int> subkeys = subkeysStr.map((s) => int.parse(s, radix: 2)).toList();
+    List<int> reversed = subkeys.reversed.toList();
 
     List<int> plainBytes = [];
     for (int i = 0; i < cipherBytes.length; i += 8) {
-      List<int> blockBytes = cipherBytes.sublist(i, i + 8);
-      String blockBinary = bytesToBinary(blockBytes);
-      String decryptedBinary = _desEncryptBlock(blockBinary, reversedSubkeys);
-      plainBytes.addAll(binaryToBytes(decryptedBinary));
+      int block = _bytesToBlock(cipherBytes.sublist(i, i + 8));
+      int decrypted = _desEncryptBlockInt(block, reversed);
+      plainBytes.addAll(_blockToBytes(decrypted));
     }
 
     int padding = plainBytes.last;
-    if (padding < 1 || padding > 8) {
-      throw Exception('Invalid padding');
-    }
+    if (padding < 1 || padding > 8) throw Exception('Invalid padding');
     for (int i = 0; i < padding; i++) {
       if (plainBytes[plainBytes.length - 1 - i] != padding) {
         throw Exception('Invalid padding');
       }
     }
     plainBytes.removeRange(plainBytes.length - padding, plainBytes.length);
-
     return utf8.decode(plainBytes);
   }
 
-  //----------------------------------------------------
-  // Triple DES
-  //----------------------------------------------------
+  String _desEncryptRaw(String inputBytesUtf16, String key) {
+    List<int> plainBytes = inputBytesUtf16.codeUnits; // no padding needed, fixed length
+    List<String> subkeysStr = desSubkeysGeneration(_keyTo56Bits(key));
+    List<int> subkeys = subkeysStr.map((s) => int.parse(s, radix: 2)).toList();
+
+    List<int> cipherBytes = [];
+    for (int i = 0; i < plainBytes.length; i += 8) {
+      int block = _bytesToBlock(plainBytes.sublist(i, i + 8));
+      int encrypted = _desEncryptBlockInt(block, subkeys);
+      cipherBytes.addAll(_blockToBytes(encrypted));
+    }
+    return String.fromCharCodes(cipherBytes);
+  }
+
+  String _desDecryptRaw(String inputBytesUtf16, String key) {
+    List<int> cipherBytes = inputBytesUtf16.codeUnits;
+    List<String> subkeysStr = desSubkeysGeneration(_keyTo56Bits(key));
+    List<int> subkeys = subkeysStr.map((s) => int.parse(s, radix: 2)).toList();
+    List<int> reversed = subkeys.reversed.toList();
+
+    List<int> plainBytes = [];
+    for (int i = 0; i < cipherBytes.length; i += 8) {
+      int block = _bytesToBlock(cipherBytes.sublist(i, i + 8));
+      int decrypted = _desEncryptBlockInt(block, reversed);
+      plainBytes.addAll(_blockToBytes(decrypted));
+    }
+    return String.fromCharCodes(plainBytes);
+  }
+
+  // ---------- DES helpers ----------
+  String _keyTo56Bits(String key) {
+    // Replicates the original removeParityBits logic but returns a 56-bit binary string
+    List<int> bytes = key.codeUnits;
+    List<int> sevenBitBlocks = List.generate(8, (i) => bytes[i] >> 1);
+    List<int> resultBytes = List.generate(7, (i) {
+      int high = sevenBitBlocks[i] << 1;
+      int low = (sevenBitBlocks[i + 1] >> 6) & 0x01;
+      return high | low;
+    });
+    return resultBytes.map((b) => b.toRadixString(2).padLeft(8, '0')).join();
+  }
+
+  List<String> desSubkeysGeneration(String key56Binary) {
+    String c = key56Binary.substring(0, 28);
+    String d = key56Binary.substring(28);
+    List<String> subkeys = [];
+    for (int round = 0; round < _shiftSchedule.length; round++) {
+      c = _circularLeftShift(c, _shiftSchedule[round]);
+      d = _circularLeftShift(d, _shiftSchedule[round]);
+      String combined = c + d;
+      subkeys.add(_compressionPermutation(combined));
+    }
+    return subkeys;
+  }
+
+  String _compressionPermutation(String key56) {
+    StringBuffer output = StringBuffer();
+    for (int i = 0; i < _pc2Table.length; i++) {
+      int sourceIndex = _pc2Table[i] - 1;
+      output.write(key56[sourceIndex]);
+    }
+    return output.toString();
+  }
+
+  String _circularLeftShift(String key28, int shiftAmount) {
+    return key28.substring(shiftAmount) + key28.substring(0, shiftAmount);
+  }
+
+  int _bytesToBlock(List<int> bytes) {
+    return (bytes[0] << 56) |
+    (bytes[1] << 48) |
+    (bytes[2] << 40) |
+    (bytes[3] << 32) |
+    (bytes[4] << 24) |
+    (bytes[5] << 16) |
+    (bytes[6] << 8) |
+    bytes[7];
+  }
+
+  List<int> _blockToBytes(int block) {
+    return [
+      (block >>> 56) & 0xFF,
+      (block >>> 48) & 0xFF,
+      (block >>> 40) & 0xFF,
+      (block >>> 32) & 0xFF,
+      (block >>> 24) & 0xFF,
+      (block >>> 16) & 0xFF,
+      (block >>> 8) & 0xFF,
+      block & 0xFF,
+    ];
+  }
+
+  // ----------------------------------------------------
+  // Triple DES (unchanged logic, now uses optimized DES)
+  // ----------------------------------------------------
   String _tripleDesEncrypt(String plainText, String key1, String key2, String key3) {
     final cycle1 = _desEncrypt(plainText, key1);
     final cycle2 = _desDecryptRaw(cycle1, key2);
@@ -137,307 +372,9 @@ class Encryption {
     return _desDecrypt(cycle2, key1);
   }
 
-  String _desEncryptRaw(String inputBytesUtf16, String key) {
-    List<int> plainBytes = inputBytesUtf16.codeUnits;
-    Uint8List asciiKey = Uint8List.fromList(key.codeUnits);
-    String key56 = removeParityBits(asciiKey);
-    String key56Binary = stringToBinary(key56);
-    List<String> subkeys = desSubkeysGeneration(key56Binary);
-
-    List<int> cipherBytes = [];
-    for (int i = 0; i < plainBytes.length; i += 8) {
-      List<int> blockBytes = plainBytes.sublist(i, i + 8);
-      String blockBinary = bytesToBinary(blockBytes);
-      String encryptedBinary = _desEncryptBlock(blockBinary, subkeys);
-      cipherBytes.addAll(binaryToBytes(encryptedBinary));
-    }
-    return String.fromCharCodes(cipherBytes);
-  }
-
-  String _desDecryptRaw(String inputBytesUtf16, String key) {
-    List<int> cipherBytes = inputBytesUtf16.codeUnits;
-    Uint8List asciiKey = Uint8List.fromList(key.codeUnits);
-    String key56 = removeParityBits(asciiKey);
-    String key56Binary = stringToBinary(key56);
-    List<String> subkeys = desSubkeysGeneration(key56Binary);
-    List<String> reversedSubkeys = subkeys.reversed.toList();
-
-    List<int> plainBytes = [];
-    for (int i = 0; i < cipherBytes.length; i += 8) {
-      List<int> blockBytes = cipherBytes.sublist(i, i + 8);
-      String blockBinary = bytesToBinary(blockBytes);
-      String decryptedBinary = _desEncryptBlock(blockBinary, reversedSubkeys);
-      plainBytes.addAll(binaryToBytes(decryptedBinary));
-    }
-    return String.fromCharCodes(plainBytes);
-  }
-
-  //----------------------------------------------------
-  // DES Helper Functions
-  //----------------------------------------------------
-  String stringToBinary(String text) {
-    String binaryString = "";
-    for (int i = 0; i < text.length; i++) {
-      int codeUnit = text.codeUnitAt(i);
-      String binary = codeUnit.toRadixString(2);
-      String paddingBinary = binary.padLeft(8, '0');
-      binaryString = binaryString + paddingBinary;
-    }
-    return binaryString;
-  }
-
-  String bytesToBinary(List<int> bytes) {
-    StringBuffer sb = StringBuffer();
-    for (int b in bytes) {
-      sb.write(b.toRadixString(2).padLeft(8, '0'));
-    }
-    return sb.toString();
-  }
-
-  List<int> binaryToBytes(String binary) {
-    assert(binary.length % 8 == 0);
-    List<int> bytes = [];
-    for (int i = 0; i < binary.length; i += 8) {
-      String byteStr = binary.substring(i, i + 8);
-      bytes.add(int.parse(byteStr, radix: 2));
-    }
-    return bytes;
-  }
-
-  List<String> splitIntoCodeUnitBlocks(String text, {int blockSizeInCodeUnits = 4}) {
-    List<int> codeUnits = List.from(text.codeUnits);
-    int remainder = codeUnits.length % blockSizeInCodeUnits;
-    int paddingLength = remainder == 0 ? blockSizeInCodeUnits : blockSizeInCodeUnits - remainder;
-    codeUnits.addAll(List.filled(paddingLength, paddingLength));
-    List<String> blocks = [];
-    for (int i = 0; i < codeUnits.length; i += blockSizeInCodeUnits) {
-      blocks.add(String.fromCharCodes(codeUnits.sublist(i, i + blockSizeInCodeUnits)));
-    }
-    return blocks;
-  }
-
-  //----------------------------------------------------
-  // DES permutations
-  //----------------------------------------------------
-  String compressionPermutation(String key56) {
-    const pc2Table = [
-      14, 17, 11, 24, 1, 5, 3, 28, 15, 6, 21, 10, 23, 19, 12, 4,
-      26, 8, 16, 7, 27, 20, 13, 2, 41, 52, 31, 37, 47, 55, 30, 40,
-      51, 45, 33, 48, 44, 49, 39, 56, 34, 53, 46, 42, 50, 36, 29, 32
-    ];
-    final output = StringBuffer();
-    for (int i = 0; i < pc2Table.length; i++) {
-      int sourceIndex = pc2Table[i] - 1;
-      output.write(key56[sourceIndex]);
-    }
-    return output.toString();
-  }
-
-  String expansionPermutation(String string32) {
-    const eTable = [
-      32, 1, 2, 3, 4, 5, 4, 5, 6, 7, 8, 9, 8, 9, 10, 11,
-      12, 13, 12, 13, 14, 15, 16, 17, 16, 17, 18, 19, 20, 21,
-      20, 21, 22, 23, 24, 25, 24, 25, 26, 27, 28, 29, 28, 29, 30, 31, 32, 1
-    ];
-    final output = StringBuffer();
-    for (int i = 0; i < eTable.length; i++) {
-      int sourceBit = eTable[i];
-      output.write(string32[sourceBit - 1]);
-    }
-    return output.toString();
-  }
-
-  String initialPermutation(String input64) {
-    const ipTable = [
-      58, 50, 42, 34, 26, 18, 10, 2, 60, 52, 44, 36, 28, 20, 12, 4,
-      62, 54, 46, 38, 30, 22, 14, 6, 64, 56, 48, 40, 32, 24, 16, 8,
-      57, 49, 41, 33, 25, 17, 9, 1, 59, 51, 43, 35, 27, 19, 11, 3,
-      61, 53, 45, 37, 29, 21, 13, 5, 63, 55, 47, 39, 31, 23, 15, 7
-    ];
-    final output = StringBuffer();
-    for (int i = 0; i < ipTable.length; i++) {
-      int bitIndex = ipTable[i] - 1;
-      output.write(input64[bitIndex]);
-    }
-    return output.toString();
-  }
-
-  String permutation(String input32) {
-    const pBox = [
-      16, 7, 20, 21, 29, 12, 28, 17, 1, 15, 23, 26, 5, 18, 31, 10,
-      2, 8, 24, 14, 32, 27, 3, 9, 19, 13, 30, 6, 22, 11, 4, 25
-    ];
-    final output = StringBuffer();
-    for (int i = 0; i < pBox.length; i++) {
-      int bitIndex = pBox[i] - 1;
-      output.write(input32[bitIndex]);
-    }
-    return output.toString();
-  }
-
-  String finalPermutation(String input64) {
-    const ipInv = [
-      40, 8, 48, 16, 56, 24, 64, 32, 39, 7, 47, 15, 55, 23, 63, 31,
-      38, 6, 46, 14, 54, 22, 62, 30, 37, 5, 45, 13, 53, 21, 61, 29,
-      36, 4, 44, 12, 52, 20, 60, 28, 35, 3, 43, 11, 51, 19, 59, 27,
-      34, 2, 42, 10, 50, 18, 58, 26, 33, 1, 41, 9, 49, 17, 57, 25
-    ];
-    final output = StringBuffer();
-    for (int i = 0; i < ipInv.length; i++) {
-      int bitIndex = ipInv[i] - 1;
-      output.write(input64[bitIndex]);
-    }
-    return output.toString();
-  }
-
-  //----------------------------------------------------
-  // DES key preparation
-  //----------------------------------------------------
-  String removeParityBits(List<int> bytes) {
-    List<int> sevenBitBlocks = [];
-    for (int b in bytes) {
-      sevenBitBlocks.add(b >> 1);
-    }
-    List<int> resultBytes = [];
-    for (int i = 0; i < 7; i++) {
-      int high = sevenBitBlocks[i] << 1;
-      int low = (sevenBitBlocks[i + 1] >> 6) & 0x01;
-      resultBytes.add(high | low);
-    }
-    return String.fromCharCodes(resultBytes);
-  }
-
-  List<String> desSubkeysGeneration(String key) {
-    List<String> subkeys = <String>[];
-    String c = key.substring(0, 28);
-    String d = key.substring(28);
-    List<int> shifts = [1, 1, 2, 2, 2, 2, 2, 2, 1, 2, 2, 2, 2, 2, 2, 1];
-    for (int round = 0; round < shifts.length; round++) {
-      c = circularLeftShift(c, shifts[round]);
-      d = circularLeftShift(d, shifts[round]);
-      final combined = c + d;
-      final subkey = compressionPermutation(combined);
-      subkeys.add(subkey);
-    }
-    return subkeys;
-  }
-
-  String circularLeftShift(String key28, int shiftAmount) {
-    return key28.substring(shiftAmount) + key28.substring(0, shiftAmount);
-  }
-
-  //----------------------------------------------------
-  // DES encryption block
-  //----------------------------------------------------
-  String _desEncryptBlock(String block, List<String> subkeys) {
-    String blockAfterIP = initialPermutation(block);
-    String left = blockAfterIP.substring(0, 32);
-    String right = blockAfterIP.substring(32);
-
-    for (int i = 0; i < 16; i++) {
-      String newRight = xorBinaryStrings(left, feistelFunction(right, subkeys[i]));
-      left = right;
-      right = newRight;
-    }
-
-    String preOutput = right + left;
-    return finalPermutation(preOutput);
-  }
-
-  String xorBinaryStrings(String a, String b) {
-    assert(a.length == b.length);
-    final result = StringBuffer();
-    for (int i = 0; i < a.length; i++) {
-      result.write(a[i] == b[i] ? '0' : '1');
-    }
-    return result.toString();
-  }
-
-  String feistelFunction(String right32, String subkey48) {
-    String expanded = expansionPermutation(right32);
-    String xored = xorBinaryStrings(expanded, subkey48);
-    String substituted = sBoxSubstitution(xored);
-    return permutation(substituted);
-  }
-
-  String sBoxSubstitution(String xored) {
-    List<String> chunks = [];
-    for (int i = 0; i < xored.length; i += 6) {
-      chunks.add(xored.substring(i, i + 6));
-    }
-    final output32Bits = StringBuffer();
-    const List<List<List<int>>> sBoxes = [
-      // S1
-      [
-        [14, 4, 13, 1, 2, 15, 11, 8, 3, 10, 6, 12, 5, 9, 0, 7],
-        [0, 15, 7, 4, 14, 2, 13, 1, 10, 6, 12, 11, 9, 5, 3, 8],
-        [4, 1, 14, 8, 13, 6, 2, 11, 15, 12, 9, 7, 3, 10, 5, 0],
-        [15, 12, 8, 2, 4, 9, 1, 7, 5, 11, 3, 14, 10, 0, 6, 13]
-      ],
-      // S2
-      [
-        [15, 1, 8, 14, 6, 11, 3, 4, 9, 7, 2, 13, 12, 0, 5, 10],
-        [3, 13, 4, 7, 15, 2, 8, 14, 12, 0, 1, 10, 6, 9, 11, 5],
-        [0, 14, 7, 11, 10, 4, 13, 1, 5, 8, 12, 6, 9, 3, 2, 15],
-        [13, 8, 10, 1, 3, 15, 4, 2, 11, 6, 7, 12, 0, 5, 14, 9]
-      ],
-      // S3
-      [
-        [10, 0, 9, 14, 6, 3, 15, 5, 1, 13, 12, 7, 11, 4, 2, 8],
-        [13, 7, 0, 9, 3, 4, 6, 10, 2, 8, 5, 14, 12, 11, 15, 1],
-        [13, 6, 4, 9, 8, 15, 3, 0, 11, 1, 2, 12, 5, 10, 14, 7],
-        [1, 10, 13, 0, 6, 9, 8, 7, 4, 15, 14, 3, 11, 5, 2, 12]
-      ],
-      // S4
-      [
-        [7, 13, 14, 3, 0, 6, 9, 10, 1, 2, 8, 5, 11, 12, 4, 15],
-        [13, 8, 11, 5, 6, 15, 0, 3, 4, 7, 2, 12, 1, 10, 14, 9],
-        [10, 6, 9, 0, 12, 11, 7, 13, 15, 1, 3, 14, 5, 2, 8, 4],
-        [3, 15, 0, 6, 10, 1, 13, 8, 9, 4, 5, 11, 12, 7, 2, 14]
-      ],
-      // S5
-      [
-        [2, 12, 4, 1, 7, 10, 11, 6, 8, 5, 3, 15, 13, 0, 14, 9],
-        [14, 11, 2, 12, 4, 7, 13, 1, 5, 0, 15, 10, 3, 9, 8, 6],
-        [4, 2, 1, 11, 10, 13, 7, 8, 15, 9, 12, 5, 6, 3, 0, 14],
-        [11, 8, 12, 7, 1, 14, 2, 13, 6, 15, 0, 9, 10, 4, 5, 3]
-      ],
-      // S6
-      [
-        [12, 1, 10, 15, 9, 2, 6, 8, 0, 13, 3, 4, 14, 7, 5, 11],
-        [10, 15, 4, 2, 7, 12, 9, 5, 6, 1, 13, 14, 0, 11, 3, 8],
-        [9, 14, 15, 5, 2, 8, 12, 3, 7, 0, 4, 10, 1, 13, 11, 6],
-        [4, 3, 2, 12, 9, 5, 15, 10, 11, 14, 1, 7, 6, 0, 8, 13]
-      ],
-      // S7
-      [
-        [4, 11, 2, 14, 15, 0, 8, 13, 3, 12, 9, 7, 5, 10, 6, 1],
-        [13, 0, 11, 7, 4, 9, 1, 10, 14, 3, 5, 12, 2, 15, 8, 6],
-        [1, 4, 11, 13, 12, 3, 7, 14, 10, 15, 6, 8, 0, 5, 9, 2],
-        [6, 11, 13, 8, 1, 4, 10, 7, 9, 5, 0, 15, 14, 2, 3, 12]
-      ],
-      // S8
-      [
-        [13, 2, 8, 4, 6, 15, 11, 1, 10, 9, 3, 14, 5, 0, 12, 7],
-        [1, 15, 13, 8, 10, 3, 7, 4, 12, 5, 6, 11, 0, 14, 9, 2],
-        [7, 11, 4, 1, 9, 12, 14, 2, 0, 6, 10, 13, 15, 3, 5, 8],
-        [2, 1, 14, 7, 4, 10, 8, 13, 15, 12, 9, 0, 3, 5, 6, 11]
-      ]
-    ];
-
-    for (int i = 0; i < 8; i++) {
-      String chunk6Bit = chunks[i];
-      int row = int.parse("${chunk6Bit[0]}${chunk6Bit[5]}", radix: 2);
-      int col = int.parse(chunk6Bit.substring(1, 5), radix: 2);
-      int value = sBoxes[i][row][col];
-      output32Bits.write(value.toRadixString(2).padLeft(4, '0'));
-    }
-    return output32Bits.toString();
-  }
-
-  //----------------------------------------------------
-  // AES
-  //----------------------------------------------------
+  // ============================================================
+  //                          AES (slightly optimized)
+  // ============================================================
   static const List<int> sBox = [
     0x63, 0x7c, 0x77, 0x7b, 0xf2, 0x6b, 0x6f, 0xc5, 0x30, 0x01, 0x67, 0x2b, 0xfe, 0xd7, 0xab, 0x76,
     0xca, 0x82, 0xc9, 0x7d, 0xfa, 0x59, 0x47, 0xf0, 0xad, 0xd4, 0xa2, 0xaf, 0x9c, 0xa4, 0x72, 0xc0,
@@ -491,7 +428,8 @@ class Encryption {
     List<int> expandedKey = _keyExpansion(keyBytes);
     int nR = (keyBytes.length ~/ 4) + 6;
 
-    List<int> plainBytes = List.from(utf8.encode(plainText));
+    // Convert to growable list so we can add padding
+    List<int> plainBytes = utf8.encode(plainText).toList();
     int blockSize = 16;
     int padding = blockSize - (plainBytes.length % blockSize);
     if (padding == 0) padding = blockSize;
@@ -503,13 +441,11 @@ class Encryption {
       Uint8List encryptedBlock = _aesEncryptBlock(block, expandedKey, nR);
       cipherBytes.addAll(encryptedBlock);
     }
-
     return base64.encode(cipherBytes);
   }
 
   String _aesDecrypt(String cipherText, String key) {
     List<int> cipherBytes = base64.decode(cipherText);
-
     Uint8List keyBytes = Uint8List.fromList(key.codeUnits);
     if (keyBytes.length != 16 && keyBytes.length != 24 && keyBytes.length != 32) {
       throw Exception('AES key must be 16, 24, or 32 bytes (got ${keyBytes.length})');
@@ -526,21 +462,18 @@ class Encryption {
     }
 
     int padding = plainBytes.last;
-    if (padding < 1 || padding > blockSize) {
-      throw Exception('Invalid padding');
-    }
+    if (padding < 1 || padding > blockSize) throw Exception('Invalid padding');
     for (int i = 0; i < padding; i++) {
       if (plainBytes[plainBytes.length - 1 - i] != padding) {
         throw Exception('Invalid padding');
       }
     }
     plainBytes.removeRange(plainBytes.length - padding, plainBytes.length);
-
     return utf8.decode(plainBytes);
   }
 
   Uint8List _aesEncryptBlock(Uint8List block, List<int> expandedKey, int nR) {
-    List<List<int>> state = List.generate(4, (i) => List.filled(4, 0));
+    List<List<int>> state = List.generate(4, (_) => List.filled(4, 0));
     for (int col = 0; col < 4; col++) {
       for (int row = 0; row < 4; row++) {
         state[row][col] = block[4 * col + row];
@@ -548,14 +481,12 @@ class Encryption {
     }
 
     _addRoundKey(state, expandedKey.sublist(0, 4));
-
     for (int round = 1; round < nR; round++) {
       _subBytes(state);
       _shiftRows(state);
       _mixColumns(state);
       _addRoundKey(state, expandedKey.sublist(4 * round, 4 * (round + 1)));
     }
-
     _subBytes(state);
     _shiftRows(state);
     _addRoundKey(state, expandedKey.sublist(4 * nR, 4 * (nR + 1)));
@@ -570,7 +501,7 @@ class Encryption {
   }
 
   Uint8List _aesDecryptBlock(Uint8List block, List<int> expandedKey, int nR) {
-    List<List<int>> state = List.generate(4, (i) => List.filled(4, 0));
+    List<List<int>> state = List.generate(4, (_) => List.filled(4, 0));
     for (int col = 0; col < 4; col++) {
       for (int row = 0; row < 4; row++) {
         state[row][col] = block[4 * col + row];
@@ -578,14 +509,12 @@ class Encryption {
     }
 
     _addRoundKey(state, expandedKey.sublist(4 * nR, 4 * (nR + 1)));
-
     for (int round = nR - 1; round > 0; round--) {
       _invShiftRows(state);
       _invSubBytes(state);
       _addRoundKey(state, expandedKey.sublist(4 * round, 4 * (round + 1)));
       _invMixColumns(state);
     }
-
     _invShiftRows(state);
     _invSubBytes(state);
     _addRoundKey(state, expandedKey.sublist(0, 4));
@@ -625,30 +554,23 @@ class Encryption {
     return w;
   }
 
-  int _rotWord(int word) {
-    return ((word << 8) & 0xFFFFFF00) | (word >> 24);
-  }
-
+  int _rotWord(int word) => ((word << 8) & 0xFFFFFF00) | (word >> 24);
   int _subWord(int word) {
-    int b0 = sBox[(word >> 24) & 0xFF];
-    int b1 = sBox[(word >> 16) & 0xFF];
-    int b2 = sBox[(word >> 8) & 0xFF];
-    int b3 = sBox[word & 0xFF];
-    return (b0 << 24) | (b1 << 16) | (b2 << 8) | b3;
+    return (sBox[(word >> 24) & 0xFF] << 24) |
+    (sBox[(word >> 16) & 0xFF] << 16) |
+    (sBox[(word >> 8) & 0xFF] << 8) |
+    sBox[word & 0xFF];
   }
 
-  int xTime(int x) {
-    return ((x << 1) ^ ((x & 0x80) != 0 ? 0x1B : 0)) & 0xFF;
-  }
-
-  int mul(int a, int b) {
-    int result = 0;
+  int _xTime(int x) => ((x << 1) ^ ((x & 0x80) != 0 ? 0x1B : 0)) & 0xFF;
+  int _mul(int a, int b) {
+    int res = 0;
     for (int i = 0; i < 8; i++) {
-      if ((b & 0x01) != 0) result ^= a;
-      a = xTime(a);
+      if ((b & 0x01) != 0) res ^= a;
+      a = _xTime(a);
       b >>= 1;
     }
-    return result;
+    return res;
   }
 
   void _subBytes(List<List<int>> state) {
@@ -669,74 +591,55 @@ class Encryption {
 
   void _shiftRows(List<List<int>> state) {
     List<int> temp = List.from(state[1]);
-    for (int i = 0; i < 4; i++) {
-      state[1][i] = temp[(i + 1) % 4];
-    }
+    for (int i = 0; i < 4; i++) state[1][i] = temp[(i + 1) % 4];
     temp = List.from(state[2]);
-    for (int i = 0; i < 4; i++) {
-      state[2][i] = temp[(i + 2) % 4];
-    }
+    for (int i = 0; i < 4; i++) state[2][i] = temp[(i + 2) % 4];
     temp = List.from(state[3]);
-    for (int i = 0; i < 4; i++) {
-      state[3][i] = temp[(i + 3) % 4];
-    }
+    for (int i = 0; i < 4; i++) state[3][i] = temp[(i + 3) % 4];
   }
 
   void _invShiftRows(List<List<int>> state) {
     List<int> temp = List.from(state[1]);
-    for (int i = 0; i < 4; i++) {
-      state[1][i] = temp[(i + 3) % 4];
-    }
+    for (int i = 0; i < 4; i++) state[1][i] = temp[(i + 3) % 4];
     temp = List.from(state[2]);
-    for (int i = 0; i < 4; i++) {
-      state[2][i] = temp[(i + 2) % 4];
-    }
+    for (int i = 0; i < 4; i++) state[2][i] = temp[(i + 2) % 4];
     temp = List.from(state[3]);
-    for (int i = 0; i < 4; i++) {
-      state[3][i] = temp[(i + 1) % 4];
-    }
+    for (int i = 0; i < 4; i++) state[3][i] = temp[(i + 1) % 4];
   }
 
   void _mixColumns(List<List<int>> state) {
     for (int c = 0; c < 4; c++) {
-      int a0 = state[0][c];
-      int a1 = state[1][c];
-      int a2 = state[2][c];
-      int a3 = state[3][c];
-      state[0][c] = mul(0x02, a0) ^ mul(0x03, a1) ^ a2 ^ a3;
-      state[1][c] = a0 ^ mul(0x02, a1) ^ mul(0x03, a2) ^ a3;
-      state[2][c] = a0 ^ a1 ^ mul(0x02, a2) ^ mul(0x03, a3);
-      state[3][c] = mul(0x03, a0) ^ a1 ^ a2 ^ mul(0x02, a3);
+      int a0 = state[0][c], a1 = state[1][c], a2 = state[2][c], a3 = state[3][c];
+      state[0][c] = _mul(0x02, a0) ^ _mul(0x03, a1) ^ a2 ^ a3;
+      state[1][c] = a0 ^ _mul(0x02, a1) ^ _mul(0x03, a2) ^ a3;
+      state[2][c] = a0 ^ a1 ^ _mul(0x02, a2) ^ _mul(0x03, a3);
+      state[3][c] = _mul(0x03, a0) ^ a1 ^ a2 ^ _mul(0x02, a3);
     }
   }
 
   void _invMixColumns(List<List<int>> state) {
     for (int c = 0; c < 4; c++) {
-      int a0 = state[0][c];
-      int a1 = state[1][c];
-      int a2 = state[2][c];
-      int a3 = state[3][c];
-      state[0][c] = mul(0x0e, a0) ^ mul(0x0b, a1) ^ mul(0x0d, a2) ^ mul(0x09, a3);
-      state[1][c] = mul(0x09, a0) ^ mul(0x0e, a1) ^ mul(0x0b, a2) ^ mul(0x0d, a3);
-      state[2][c] = mul(0x0d, a0) ^ mul(0x09, a1) ^ mul(0x0e, a2) ^ mul(0x0b, a3);
-      state[3][c] = mul(0x0b, a0) ^ mul(0x0d, a1) ^ mul(0x09, a2) ^ mul(0x0e, a3);
+      int a0 = state[0][c], a1 = state[1][c], a2 = state[2][c], a3 = state[3][c];
+      state[0][c] = _mul(0x0e, a0) ^ _mul(0x0b, a1) ^ _mul(0x0d, a2) ^ _mul(0x09, a3);
+      state[1][c] = _mul(0x09, a0) ^ _mul(0x0e, a1) ^ _mul(0x0b, a2) ^ _mul(0x0d, a3);
+      state[2][c] = _mul(0x0d, a0) ^ _mul(0x09, a1) ^ _mul(0x0e, a2) ^ _mul(0x0b, a3);
+      state[3][c] = _mul(0x0b, a0) ^ _mul(0x0d, a1) ^ _mul(0x09, a2) ^ _mul(0x0e, a3);
     }
   }
 
   void _addRoundKey(List<List<int>> state, List<int> roundKeyWords) {
     for (int col = 0; col < 4; col++) {
       int word = roundKeyWords[col];
-      state[0][col] = state[0][col] ^ ((word >> 24) & 0xFF);
-      state[1][col] = state[1][col] ^ ((word >> 16) & 0xFF);
-      state[2][col] = state[2][col] ^ ((word >> 8) & 0xFF);
-      state[3][col] = state[3][col] ^ (word & 0xFF);
+      state[0][col] ^= (word >> 24) & 0xFF;
+      state[1][col] ^= (word >> 16) & 0xFF;
+      state[2][col] ^= (word >> 8) & 0xFF;
+      state[3][col] ^= word & 0xFF;
     }
   }
 
-  //----------------------------------------------------
-  // File Encryption - Platform-Aware
-  //----------------------------------------------------
-
+  // ============================================================
+  //                     File Encryption
+  // ============================================================
   static Future<void> createEncryptedFileStub(
       String inputPath,
       String outputPath, {
@@ -745,7 +648,6 @@ class Encryption {
         String? key2,
         String? key3,
       }) async {
-    // This method is for native platforms only
     await encryptFile(
       inputPath,
       outputPath,
@@ -789,7 +691,6 @@ class Encryption {
     final outputFile = File(outputPath);
     await outputFile.parent.create(recursive: true);
     await outputFile.writeAsString(cipherText, encoding: utf8);
-
     print('✅ File encrypted to: ${outputFile.absolute.path}');
   }
 
@@ -826,7 +727,6 @@ class Encryption {
     final outputFile = File(outputPath);
     await outputFile.parent.create(recursive: true);
     await outputFile.writeAsBytes(bytes);
-
     print('✅ File decrypted to: ${outputFile.absolute.path}');
   }
 }

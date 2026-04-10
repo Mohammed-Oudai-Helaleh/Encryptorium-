@@ -14,11 +14,11 @@ import 'package:encryptorium/custom/clear_all_button.dart';
 import 'package:encryptorium/custom/file_picker_button.dart';
 import 'package:encryptorium/custom/output_field.dart';
 import 'package:encryptorium/models/cipher.dart';
-import 'package:encryptorium/backend/encryption.dart';
 import 'package:encryptorium/models/aes_key_length.dart';
 import 'package:encryptorium/utils/file_utils.dart';
 import 'package:encryptorium/utils/key_generator.dart';
 import 'package:universal_html/html.dart' as html;
+import 'package:encryptorium/cipher_processing_page.dart';
 
 class AesEncryptPage extends StatefulWidget {
   final CipherType cipherType;
@@ -36,9 +36,6 @@ class _AesEncryptPageState extends State<AesEncryptPage> {
 
   // Selected key length (default 128 bits / 16 bytes)
   AesKeyLength _selectedKeyLength = AesKeyLength.bits128;
-
-  // Loading state
-  bool _isEncrypting = false;
 
   // Validation errors
   String? _plaintextError;
@@ -135,6 +132,12 @@ class _AesEncryptPageState extends State<AesEncryptPage> {
   }
 
   Future<void> _encrypt() async {
+    // 🔍 DEBUG: Confirm this method is called on Web
+    if (kIsWeb) {
+      debugPrint('🔐 [AES] _encrypt() STARTED');
+      debugPrint('🔐 [AES] isFileMode: ${_selectedFile != null || _selectedFileBytes != null}');
+    }
+
     _submitted = true;
     _validateAll();
 
@@ -146,105 +149,116 @@ class _AesEncryptPageState extends State<AesEncryptPage> {
     }
 
     _outputController.clear();
-    setState(() => _isEncrypting = true);
 
-    try {
-      if (kIsWeb) {
-        await _encryptWeb();
-      } else {
-        await _encryptNative();
+    // 1️⃣ Prepare input data for background processing
+    final bool isFileMode = _selectedFile != null || _selectedFileBytes != null;
+    String inputData = _plaintextController.text;
+
+    if (isFileMode && _selectedFileBytes != null) {
+      // Web file mode: encode bytes to base64 string for isolate transfer
+      inputData = base64.encode(_selectedFileBytes!);
+    } else if (isFileMode && _selectedFile != null) {
+      // Native file mode: read file as bytes, then encode to base64
+      try {
+        final fileBytes = await _selectedFile!.readAsBytes();
+        inputData = base64.encode(fileBytes);
+      } catch (e, stack) {
+        if (mounted) {
+          if (kIsWeb) {
+            debugPrint('❌ [AES] Navigation/processing error: $e');
+            debugPrint('❌ [AES] Stack: $stack');
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to read file: $e')),
+          );
+        }
+        return;
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Encryption failed: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isEncrypting = false);
-      }
+    }
+
+    // 2️⃣ Create cipher request
+    final request = CipherRequest.encrypt(
+      cipherType: widget.cipherType,
+      inputData: inputData,
+      keys: [_keyController.text],
+    );
+
+    // 3️⃣ Navigate to processing page & run encryption (platform-aware)
+    if (kIsWeb) {
+      debugPrint('🔐 [AES] About to call processCipherInBackground...');
+    }
+    final result = await processCipherInBackground(
+      context,
+      title: 'Encrypting your data...',
+      subtitle: isFileMode
+          ? 'Processing: ${_selectedFileName ?? "unknown"}'
+          : 'Securing plaintext with AES...',
+      request: request,
+    );
+
+    // 4️⃣ Handle result after auto-redirect
+    // 🔍 DEBUG: Confirm result received
+    if (kIsWeb) {
+      debugPrint('🔐 [AES] Received result: ${result != null ? 'SUCCESS' : 'NULL'}');
+    }
+    if (result != null && mounted) {
+      _handleEncryptionResult(result, isFileMode);
     }
   }
 
-  Future<void> _encryptNative() async {
-    if (_selectedFile != null) {
-      // ========== FILE MODE - Native platforms ==========
-      final encryptoriumDir = await getEncryptoriumDirectory();
-      final inputFileName = _selectedFileName ?? 'file';
-      final outputFileName = '$inputFileName.enc';
-      final outputPath = '${encryptoriumDir.path}/$outputFileName';
-
-      final key = _keyController.text;
-
-      await Encryption.createEncryptedFileStub(
-        _selectedFile!.path,
-        outputPath,
-        algorithm: widget.cipherType,
-        key1: key,
+  /// Handles the encryption result: saves/downloads file or displays ciphertext
+  void _handleEncryptionResult(String ciphertext, bool isFileMode) {
+    if (isFileMode) {
+      if (kIsWeb) {
+        // 🌐 WEB: Trigger browser download for encrypted file
+        _downloadEncryptedFileWeb('${_selectedFileName ?? 'file'}.enc', ciphertext);
+        _outputController.text = '📥 Downloaded: ${_selectedFileName ?? 'file'}.enc';
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(
+            content: Text('✅ File encrypted and downloaded: ${_selectedFileName ?? 'file'}.enc'),
+          ),
+        );
+      } else {
+        // 💻 NATIVE: Save encrypted file to disk
+        _saveEncryptedFileNative(ciphertext);
+      }
+    } else {
+      // 📝 TEXT MODE: Display ciphertext in output field
+      _outputController.text = ciphertext;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ Encryption completed successfully!')),
       );
+    }
+  }
+
+  /// Saves encrypted file to disk on native platforms (Windows/Android)
+  Future<void> _saveEncryptedFileNative(String ciphertext) async {
+    try {
+      final encryptoriumDir = await getEncryptoriumDirectory();
+      final fileName = '${_selectedFileName ?? 'file'}.enc';
+      final outputPath = '${encryptoriumDir.path}/$fileName';
+      final outputFile = File(outputPath);
+
+      await outputFile.writeAsString(ciphertext, encoding: utf8);
 
       _outputController.text = outputPath;
 
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ File encrypted! Saved to: $outputPath')),
+          SnackBar(content: Text('✅ File encrypted to: $outputPath')),
         );
       }
-    } else {
-      // ========== TEXT MODE - All platforms ==========
-      final plaintext = _plaintextController.text;
-      final key = _keyController.text;
-
-      final encryption = Encryption.aes(plaintext, key);
-      final ciphertext = encryption.encrypt();
-      _outputController.text = ciphertext;
-
+    } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Encryption completed successfully!')),
+          SnackBar(content: Text('Failed to save file: $e')),
         );
       }
     }
   }
 
-  Future<void> _encryptWeb() async {
-    if (_selectedFileBytes != null && _selectedFileName != null) {
-      // ========== FILE MODE - Web ==========
-      final base64Plain = base64.encode(_selectedFileBytes!);
-      final encryption = Encryption.aes(base64Plain, _keyController.text);
-      final cipherText = encryption.encrypt();
-
-      // Trigger browser download
-      final fileName = '${_selectedFileName!}.enc';
-      await _downloadEncryptedFileWeb(fileName, cipherText);
-
-      _outputController.text = '📥 Downloaded: $fileName';
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ File encrypted and downloaded: $fileName')),
-        );
-      }
-    } else {
-      // ========== TEXT MODE - All platforms (same as native) ==========
-      final plaintext = _plaintextController.text;
-      final key = _keyController.text;
-
-      final encryption = Encryption.aes(plaintext, key);
-      final ciphertext = encryption.encrypt();
-      _outputController.text = ciphertext;
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Encryption completed successfully!')),
-        );
-      }
-    }
-  }
-
-  /// Triggers a file download in the browser
-  Future<void> _downloadEncryptedFileWeb(String fileName, String content) async {
+  /// Triggers a browser download for encrypted content on web
+  void _downloadEncryptedFileWeb(String fileName, String content) {
     if (!kIsWeb) return;
 
     final bytes = utf8.encode(content);
@@ -462,8 +476,8 @@ class _AesEncryptPageState extends State<AesEncryptPage> {
 
   Widget _buildEncryptButton() {
     return MyOutlinedButton(
-      text: _isEncrypting ? 'Encrypting...' : 'Encrypt',
-      onPressed: _isEncrypting ? null : _encrypt,
+      text: 'Encrypt',
+      onPressed: _encrypt,
     );
   }
 }

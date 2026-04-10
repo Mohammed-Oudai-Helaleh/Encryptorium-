@@ -7,17 +7,15 @@ import 'package:flutter/services.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:encryptorium/custom/my_outlined_button.dart';
 import 'package:encryptorium/custom/my_text_field.dart';
-import 'package:encryptorium/custom/random_key_button.dart';
 import 'package:encryptorium/custom/copy_button.dart';
 import 'package:encryptorium/custom/error_text.dart';
 import 'package:encryptorium/custom/clear_all_button.dart';
 import 'package:encryptorium/custom/file_picker_button.dart';
 import 'package:encryptorium/custom/output_field.dart';
 import 'package:encryptorium/models/cipher.dart';
-import 'package:encryptorium/backend/encryption.dart';
 import 'package:encryptorium/utils/file_utils.dart';
-import 'package:encryptorium/utils/key_generator.dart';
 import 'package:universal_html/html.dart' as html;
+import 'package:encryptorium/cipher_processing_page.dart';
 
 class TripleDesDecryptPage extends StatefulWidget {
   final CipherType cipherType;
@@ -37,7 +35,7 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
 
   static const int _keyLength = 8;
 
-  bool _isDecrypting = false;
+  // Validation errors
   String? _ciphertextError;
   String? _key1Error;
   String? _key2Error;
@@ -50,34 +48,6 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
   // Web file handling
   Uint8List? _selectedCipherFileBytes;
   String? _selectedCipherFileName;
-
-  // Random key generators with uniqueness checks
-  void _generateRandomKey1() {
-    String newKey;
-    do {
-      newKey = generateRandomKey(_keyLength);
-    } while (newKey == _key2Controller.text || newKey == _key3Controller.text);
-    _key1Controller.text = newKey;
-    _validateAll();
-  }
-
-  void _generateRandomKey2() {
-    String newKey;
-    do {
-      newKey = generateRandomKey(_keyLength);
-    } while (newKey == _key1Controller.text || newKey == _key3Controller.text);
-    _key2Controller.text = newKey;
-    _validateAll();
-  }
-
-  void _generateRandomKey3() {
-    String newKey;
-    do {
-      newKey = generateRandomKey(_keyLength);
-    } while (newKey == _key1Controller.text || newKey == _key2Controller.text);
-    _key3Controller.text = newKey;
-    _validateAll();
-  }
 
   Future<void> _pickEncryptedFile() async {
     try {
@@ -183,6 +153,12 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
   }
 
   Future<void> _decrypt() async {
+    // 🔍 DEBUG: Confirm this method is called on Web
+    if (kIsWeb) {
+      debugPrint('🔓 [3DES] _decrypt() STARTED');
+      debugPrint('🔓 [3DES] isFileMode: ${_selectedCipherFile != null || _selectedCipherFileBytes != null}');
+    }
+
     _submitted = true;
     _validateAll();
 
@@ -197,41 +173,104 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
     }
 
     _outputController.clear();
-    setState(() => _isDecrypting = true);
 
-    try {
-      final key1 = _key1Controller.text;
-      final key2 = _key2Controller.text;
-      final key3 = _key3Controller.text;
+    // 1️⃣ Prepare input data for background processing
+    final bool isFileMode = _selectedCipherFile != null || _selectedCipherFileBytes != null;
+    String inputData = _ciphertextController.text;
 
-      if (kIsWeb) {
-        await _decryptWeb(key1, key2, key3);
-      } else {
-        await _decryptNative(key1, key2, key3);
+    if (isFileMode && _selectedCipherFileBytes != null) {
+      // Web file mode: decode bytes to UTF-8 string for isolate transfer
+      inputData = utf8.decode(_selectedCipherFileBytes!);
+    } else if (isFileMode && _selectedCipherFile != null) {
+      // Native file mode: read file as string directly
+      try {
+        inputData = await _selectedCipherFile!.readAsString(encoding: utf8);
+      } catch (e, stack) {
+        if (mounted) {
+          if (kIsWeb) {
+            debugPrint('❌ [3DES] Navigation/processing error: $e');
+            debugPrint('❌ [3DES] Stack: $stack');
+          }
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('Failed to read file: $e')),
+          );
+        }
+        return;
       }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('Decryption failed: $e')),
-        );
-      }
-    } finally {
-      if (mounted) {
-        setState(() => _isDecrypting = false);
-      }
+    }
+
+    // 2️⃣ Create cipher request for DECRYPTION (3 keys for Triple DES)
+    final request = CipherRequest.decrypt(
+      cipherType: widget.cipherType,
+      inputData: inputData,
+      keys: [_key1Controller.text, _key2Controller.text, _key3Controller.text],
+    );
+
+    // 3️⃣ Navigate to processing page & run decryption (platform-aware)
+    if (kIsWeb) {
+      debugPrint('🔓 [3DES] About to call processCipherInBackground...');
+    }
+    final result = await processCipherInBackground(
+      context,
+      title: 'Decrypting your data...',
+      subtitle: isFileMode
+          ? 'Processing: ${_selectedCipherFileName ?? "unknown"}'
+          : 'Restoring plaintext with Triple DES...',
+      request: request,
+    );
+
+    // 4️⃣ Handle result after auto-redirect
+    // 🔍 DEBUG: Confirm result received
+    if (kIsWeb) {
+      debugPrint('🔓 [3DES] Received result: ${result != null ? 'SUCCESS' : 'NULL'}');
+    }
+    if (result != null && mounted) {
+      _handleDecryptionResult(result, isFileMode);
     }
   }
 
-  Future<void> _decryptNative(String key1, String key2, String key3) async {
-    if (_selectedCipherFile != null) {
-      // ========== FILE MODE - Native platforms ==========
-      final cipherFile = _selectedCipherFile!;
-      final cipherText = await cipherFile.readAsString(encoding: utf8);
+  /// Handles the decryption result: saves/downloads file or displays plaintext
+  void _handleDecryptionResult(String plaintext, bool isFileMode) {
+    if (isFileMode) {
+      if (kIsWeb) {
+        // 🌐 WEB: Decode base64 plaintext to bytes, then trigger download
+        try {
+          final originalBytes = base64.decode(plaintext);
+          String originalFileName = _selectedCipherFileName ?? 'decrypted_file';
+          if (originalFileName.endsWith('.enc')) {
+            originalFileName = originalFileName.substring(0, originalFileName.length - 4);
+          } else {
+            originalFileName = 'decrypted_$originalFileName';
+          }
+          _downloadDecryptedFileWeb(originalFileName, originalBytes);
+          _outputController.text = '📥 Downloaded: $originalFileName';
+          ScaffoldMessenger.of(context).showSnackBar(
+            SnackBar(content: Text('✅ File decrypted and downloaded: $originalFileName')),
+          );
+        } catch (e) {
+          if (mounted) {
+            ScaffoldMessenger.of(context).showSnackBar(
+              SnackBar(content: Text('Failed to decode decrypted file: $e')),
+            );
+          }
+        }
+      } else {
+        // 💻 NATIVE: Save decrypted file to disk
+        _saveDecryptedFileNative(plaintext);
+      }
+    } else {
+      // 📝 TEXT MODE: Display plaintext in output field
+      _outputController.text = plaintext;
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('✅ Decryption completed successfully!')),
+      );
+    }
+  }
 
-      final encryption = Encryption.tripleDes('', key1, key2, key3);
-      final base64Plain = encryption.decrypt(cipherText);
-      final originalBytes = base64.decode(base64Plain);
-
+  /// Saves decrypted file to disk on native platforms (Windows/Android)
+  Future<void> _saveDecryptedFileNative(String base64Plaintext) async {
+    try {
+      final originalBytes = base64.decode(base64Plaintext);
       String originalFileName = _selectedCipherFileName ?? 'decrypted_file';
       if (originalFileName.endsWith('.enc')) {
         originalFileName = originalFileName.substring(0, originalFileName.length - 4);
@@ -251,68 +290,21 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
           SnackBar(content: Text('✅ File decrypted to: $outputPath')),
         );
       }
-    } else {
-      // ========== TEXT MODE - All platforms ==========
-      final ciphertext = _ciphertextController.text;
-      final encryption = Encryption.tripleDes('', key1, key2, key3);
-      final plaintext = encryption.decrypt(ciphertext);
-      _outputController.text = plaintext;
-
+    } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Decryption completed successfully!')),
-        );
-      }
-    }
-  }
-
-  Future<void> _decryptWeb(String key1, String key2, String key3) async {
-    if (_selectedCipherFileBytes != null && _selectedCipherFileName != null) {
-      // ========== FILE MODE - Web ==========
-      final cipherText = utf8.decode(_selectedCipherFileBytes!);
-
-      final encryption = Encryption.tripleDes('', key1, key2, key3);
-      final base64Plain = encryption.decrypt(cipherText);
-      final originalBytes = base64.decode(base64Plain);
-
-      String originalFileName = _selectedCipherFileName!;
-      if (originalFileName.endsWith('.enc')) {
-        originalFileName = originalFileName.substring(0, originalFileName.length - 4);
-      } else {
-        originalFileName = 'decrypted_$originalFileName';
-      }
-
-      // Trigger browser download for decrypted file
-      await _downloadDecryptedFileWeb(originalFileName, originalBytes);
-
-      _outputController.text = '📥 Downloaded: $originalFileName';
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(content: Text('✅ File decrypted and downloaded: $originalFileName')),
-        );
-      }
-    } else {
-      // ========== TEXT MODE - All platforms (same as native) ==========
-      final ciphertext = _ciphertextController.text;
-      final encryption = Encryption.tripleDes('', key1, key2, key3);
-      final plaintext = encryption.decrypt(ciphertext);
-      _outputController.text = plaintext;
-
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('✅ Decryption completed successfully!')),
+          SnackBar(content: Text('Failed to save file: $e')),
         );
       }
     }
   }
 
   /// Triggers a file download in the browser for binary data
-  Future<void> _downloadDecryptedFileWeb(String fileName, List<int> bytes) async {
+  void _downloadDecryptedFileWeb(String fileName, List<int> bytes) {
     if (!kIsWeb) return;
 
     final base64Data = base64.encode(bytes);
-    final dataUri = 'data:application/octet-stream;base64,$base64Data';
+    final dataUri = 'application/octet-stream;base64,$base64Data';
 
     // Create and trigger download link
     final anchor = html.AnchorElement(href: dataUri)
@@ -378,7 +370,6 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
               controller: _key1Controller,
               hint: 'Key 1 (exactly 8 chars)',
               errorText: _key1Error,
-              onRandom: _generateRandomKey1,
             ),
             const SizedBox(height: 16),
             _buildKeyField(
@@ -386,7 +377,6 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
               controller: _key2Controller,
               hint: 'Key 2 (exactly 8 chars)',
               errorText: _key2Error,
-              onRandom: _generateRandomKey2,
             ),
             const SizedBox(height: 16),
             _buildKeyField(
@@ -394,7 +384,6 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
               controller: _key3Controller,
               hint: 'Key 3 (exactly 8 chars)',
               errorText: _key3Error,
-              onRandom: _generateRandomKey3,
             ),
             const SizedBox(height: 32),
             _buildDecryptButton(),
@@ -466,7 +455,6 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
     required TextEditingController controller,
     required String hint,
     required String? errorText,
-    required VoidCallback onRandom,
   }) {
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -486,8 +474,6 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
                 onChanged: (_) => _validateAll(),
               ),
             ),
-            const SizedBox(width: 8),
-            RandomKeyButton(onPressed: onRandom),
             const SizedBox(width: 8),
             IconButton(
               icon: const Icon(Icons.paste, size: 20),
@@ -523,8 +509,8 @@ class _TripleDesDecryptPageState extends State<TripleDesDecryptPage> {
 
   Widget _buildDecryptButton() {
     return MyOutlinedButton(
-      text: _isDecrypting ? 'Decrypting...' : 'Decrypt',
-      onPressed: _isDecrypting ? null : _decrypt,
+      text: 'Decrypt',
+      onPressed: _decrypt,
     );
   }
 }

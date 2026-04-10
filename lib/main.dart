@@ -17,7 +17,7 @@ class MyApp extends StatelessWidget {
       theme: ThemeData.light(),      // light theme
       darkTheme: ThemeData.dark(),   // dark theme
       themeMode: ThemeMode.system,   // follow system setting
-      title: 'Cipher Toy',
+      title: 'Encryptorium',
       home: const MyHomePage(title: 'Choose Cipher'),
     );
   }
